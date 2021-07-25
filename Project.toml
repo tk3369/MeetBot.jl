@@ -1,0 +1,13 @@
+name = "MyBot"
+uuid = "79d9beb5-fca4-4438-bb08-837adfc2a951"
+authors = ["Tom Kwong <tk3369@gmail.com> and contributors"]
+version = "0.1.0"
+
+[compat]
+julia = "1"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
