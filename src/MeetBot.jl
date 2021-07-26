@@ -22,7 +22,7 @@ end
 
 "Shut down bot. This can be used by specific people only."
 function shutdown_command(c::Client, m::Message)
-    if m.author.id === 0x079fc5a25082000b
+    if m.author.id in (0x079fc5a25082000b, 0x04989e135042000b)
         @info "Shutting down, please wait..." now()
         close(c)
     else
