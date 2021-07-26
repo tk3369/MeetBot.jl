@@ -1,7 +1,8 @@
 module MeetBot
 
 using Discord
-using Dates: now, DateTime, Second, Minute
+using Discord: Snowflake
+using Dates: now, DateTime, TimePeriod, Second, Minute, Hour
 using Base.Threads: SpinLock
 
 const PREFIX = ","
@@ -14,10 +15,42 @@ const MEET_CHANNELS = Set()
 const MEET_CHANNELS_LOCK = SpinLock()
 
 mutable struct MeetRequest
+    guild_id::Snowflake
     user::User
     queue_time::DateTime
     notify1::Bool
     notify2::Bool
+end
+
+struct MeetChannel
+    channel_id::Snowflake
+    created_time::DateTime
+    name::String
+end
+
+Base.@kwdef struct Config
+    meet_channel_lifetime::TimePeriod
+    time_to_notify1::TimePeriod
+    time_to_notify2::TimePeriod
+    time_to_delete_request::TimePeriod
+end
+
+function get_config()
+    if get(ENV, "MEETBOT_ENV", "DEV") == "DEV"
+        return Config(
+            meet_channel_lifetime = Minute(10),
+            time_to_notify1 = Second(5),
+            time_to_notify2 = Second(15),
+            time_to_delete_request = Minute(1),
+        )
+    else
+        return Config(
+            meet_channel_lifetime = Hour(2),
+            time_to_notify1 = Minute(5),
+            time_to_notify2 = Minute(30),
+            time_to_delete_request = Hour(2),
+        )
+    end
 end
 
 "Shut down bot. This can be used by specific people only."
@@ -33,7 +66,7 @@ end
 "Create a new meet request."
 function meet_command(c::Client, m::Message)
     @info "Meet command"
-    request = MeetRequest(m.author, now(), false, false)
+    request = MeetRequest(m.guild_id, m.author, now(), false, false)
     put!(QUEUE, request)
     username = m.author.username
     reply(c, m, "Hey, $(username), you have been added to the meetup queue. Stay tuned...")
@@ -157,9 +190,13 @@ function empty_meet_group()
 end
 
 "Send DM to user and tell them to be patient"
-function notify_participant(request)
-    message = "I know, you've been waiting for a while. Please be patient."
-    @info "Sending DM to $(request.user.username)" message now() #TODO
+function notify_participant(request, notify_count)
+    if notify_count == 1
+        message = "I know, you've been waiting for a while. Please be patient."
+    else
+        message = "Unfortunately, we are still waiting for someone to meet up. We will let you know once it's available."
+    end
+    @info "Sending DM to $(request.user.username)" message now()
 end
 
 """
@@ -169,10 +206,8 @@ Check meet group. For each participant:
 3. Send a DM & cancel request when the person has waited over an hour
 """
 function check_meet_group()
-    time_to_first_reminder = Second(5) #Minute(2)
-    time_to_second_reminder = Second(15) #Minute(15)
-    time_to_delete = Minute(1) #Minute(60)
-    @info "Starting check_meet_group" time_to_first_reminder time_to_second_reminder time_to_delete
+    cfg = get_config()
+    @info "Starting check_meet_group" cfg
     try
         while true
             requests = current_requests()
@@ -180,13 +215,13 @@ function check_meet_group()
                 current_time = now()
                 foreach(requests) do request
                     elapsed = current_time - request.queue_time
-                    if elapsed > time_to_delete
+                    if elapsed > cfg.time_to_delete_request
                         cancel_request(request)
-                    elseif elapsed > time_to_second_reminder
-                        !request.notify2 && notify_participant(request)
+                    elseif elapsed > cfg.time_to_notify2
+                        !request.notify2 && notify_participant(request, 2)
                         request.notify2 = true
-                    elseif elapsed > time_to_first_reminder
-                        !request.notify1 && notify_participant(request)
+                    elseif elapsed > cfg.time_to_notify1
+                        !request.notify1 && notify_participant(request, 1)
                         request.notify1 = true
                     end
                 end
@@ -194,7 +229,7 @@ function check_meet_group()
             sleep(1)
         end
     catch ex
-        @info "check_meet_group stopped due to $(ex)"
+        @info "check_meet_group stopped due to $(ex)" now()
     end
 end
 
@@ -209,9 +244,25 @@ function get_discord_token()
 end
 
 "Garbage collect meet channels when they are too old and nobody inside"
-function gc_meet_channels()
-    lock(MEET_CHANNELS_LOCK) do 
-        # TODO delete old meet channels
+function gc_meet_channels(c::Client)
+    cfg = get_config()
+    try
+        while true
+            current_time = now()
+            @info "gc_meet_channels" current_time
+            lock(MEET_CHANNELS_LOCK) do
+                old_meet_channels = filter(MEET_CHANNELS) do mc
+                    current_time - mc.created_time > cfg.meet_channel_lifetime
+                end
+                foreach(old_meet_channels) do mc
+                    @info "Deleting channel" mc
+                    delete_channel(c, mc.channel_id)
+                end
+            end
+            sleep(60)
+        end
+    catch ex
+        @info "gc_meet_channels stopped due to $(ex)" now()
     end
 end
 
@@ -222,7 +273,7 @@ function get_client()
         prefix = PREFIX, 
         presence=(game=(name="MeetBot", type=AT_GAME),))
     open(c)
-    @info "Try fetch(Discord.get_current_user_guilds(c)).val"
+    @info "Try fetchval(Discord.get_current_user_guilds(c))"
     return c
 end
 
@@ -236,13 +287,16 @@ function run()
     open(c)
     @info "Connected to client" c
 
-    # background task
-    meet_group_checker_task = @async check_meet_group()
+    # background tasks
     @async process_meet_requests(c)
+    meet_group_checker_task = @async check_meet_group()
+    gc_meet_channels_task = @async gc_meet_channels(c)
 
     wait(c)
     @info "Disconnected Discord client"
+    
     schedule(meet_group_checker_task, InterruptException(); error = true)
+    schedule(gc_meet_channels_task, InterruptException(); error = true)
 
     return nothing
 end
