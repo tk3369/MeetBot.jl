@@ -214,13 +214,15 @@ function empty_meet_group()
 end
 
 "Send DM to user and tell them to be patient"
-function notify_participant(request, notify_count)
+function notify_participant(c::Client, request, notify_count)
     if notify_count == 1
         message = "I know, you've been waiting for a while. Please be patient."
     else
         message = "Unfortunately, we are still waiting for someone to meet up. We will let you know once it's available."
     end
     @info "Sending DM to $(request.user.username)" message now()
+    dm = fetchval(create_dm(c; recipient_id = request.user.id))
+    create_message(c, dm.id; content = message)
 end
 
 """
@@ -229,7 +231,7 @@ Check meet group. For each participant:
 2. Send a DM when the person has waited over 15 mins (be patient)
 3. Send a DM & cancel request when the person has waited over an hour
 """
-function check_meet_group()
+function check_meet_group(c::Client)
     cfg = get_config()
     @info "Starting check_meet_group" cfg
     try
@@ -242,10 +244,10 @@ function check_meet_group()
                     if elapsed > cfg.time_to_delete_request
                         cancel_request(request)
                     elseif elapsed > cfg.time_to_notify2
-                        !request.notify2 && notify_participant(request, 2)
+                        !request.notify2 && notify_participant(c, request, 2)
                         request.notify2 = true
                     elseif elapsed > cfg.time_to_notify1
-                        !request.notify1 && notify_participant(request, 1)
+                        !request.notify1 && notify_participant(c, request, 1)
                         request.notify1 = true
                     end
                 end
@@ -313,7 +315,7 @@ function run()
 
     # background tasks
     @async process_meet_requests(c)
-    meet_group_checker_task = @async check_meet_group()
+    meet_group_checker_task = @async check_meet_group(c)
     gc_meet_channels_task = @async gc_meet_channels(c)
 
     wait(c)
