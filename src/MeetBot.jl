@@ -39,7 +39,7 @@ function meet_command(c::Client, m::Message)
     reply(c, m, "Hey, $(username), you have been added to the meetup queue. Stay tuned...")
 end
 
-function process_meet_requests()
+function process_meet_requests(c::Client)
     @info "Starting process_meet_requests"
     while true
         request = take!(QUEUE)
@@ -47,7 +47,7 @@ function process_meet_requests()
         @info "process_meet_requests: got request" request
         register_request(request)
         if length(MEET_GROUP) == 3  # should be 4
-            channel = create_voice_channel()
+            channel = create_voice_channel(c)
             notify_meet_group(channel)
             empty_meet_group()
         end
@@ -58,13 +58,31 @@ end
 current_requests() = collect(values(MEET_GROUP))
 
 "Create a new voice channel"
-function create_voice_channel()
+function create_voice_channel(c::Client)
     @info "Alright, let's create a new voice channel."
     lock(MEET_CHANNELS_LOCK) do 
-        # TODO create a channel and push! to MEET_CHANNELS        
+        # TODO create a channel and push! to MEET_CHANNELS
+        guild_arr = fetchval(get_current_user_guilds(c))
+        guild = first(guild_arr)
+        room_count = length(MEET_CHANNELS) + 1
+        if room_count == 1
+            global category_id = fetchval(create(c, DiscordChannel, guild; name="Meetup", type=CT_GUILD_CATEGORY)).id
+        end
+
+        uids = keys(MEET_GROUP)
+        overwrite_arr = []
+        for id in uids
+            new_overwrite = Overwrite(id, OT_MEMBER, Int(PERM_VIEW_CHANNEL), 0)
+            append!(overwrite_arr, new_overwrite)
+        end
+        vc = fetchval(create(c, DiscordChannel, guild; name="Meetup Room "*string(room_count), 
+        type=CT_GUILD_VOICE, parent_id=category_id, permission_overwrites=overwrite_arr))
+        room_count+=1
+        push!(MEET_CHANNELS, vc)
+
+        # Return a channel object
+        return vc
     end
-    # Return a channel object
-    return "#voice-room1"
 end
 
 """
@@ -73,7 +91,7 @@ to join the voice channel.
 """
 function notify_meet_group(channel)
     for request in current_requests()
-        @info "Hey $(request.user.username), please join $channel"
+        @info "Hey $(request.user.username), please join $channel" #TODO
     end
 end
 
@@ -112,7 +130,7 @@ end
 "Send DM to user and tell them to be patient"
 function notify_participant(request)
     message = "I know, you've been waiting for a while. Please be patient."
-    @info "Sending DM to $(request.user.username)" message now()
+    @info "Sending DM to $(request.user.username)" message now() #TODO
 end
 
 """
@@ -191,7 +209,7 @@ function run()
 
     # background task
     meet_group_checker_task = @async check_meet_group()
-    @async process_meet_requests()
+    @async process_meet_requests(c)
 
     wait(c)
     @info "Disconnected Discord client"
