@@ -1,6 +1,6 @@
-using MyBot
+using MeetBot
 using Test
 
-@testset "MyBot.jl" begin
+@testset "MeetBot.jl" begin
     # Write your tests here.
 end
