@@ -10,6 +10,9 @@ const QUEUE = Channel(100)
 const MEET_GROUP = Dict()
 const MEET_GROUP_LOCK = SpinLock()
 
+const MEET_CHANNELS = Set()
+const MEET_CHANNELS_LOCK = SpinLock()
+
 mutable struct MeetRequest
     user::User
     queue_time::DateTime
@@ -57,6 +60,10 @@ current_requests() = collect(values(MEET_GROUP))
 "Create a new voice channel"
 function create_voice_channel()
     @info "Alright, let's create a new voice channel."
+    lock(MEET_CHANNELS_LOCK) do 
+        # TODO create a channel and push! to MEET_CHANNELS        
+    end
+    # Return a channel object
     return "#voice-room1"
 end
 
@@ -154,10 +161,19 @@ function get_discord_token()
     end
 end
 
+"Garbage collect meet channels when they are too old and nobody inside"
+function gc_meet_channels()
+    lock(MEET_CHANNELS_LOCK) do 
+        # TODO delete old meet channels
+    end
+end
+
 # For development only, do not use otherwise.
 function get_client()
     token = get_discord_token()
-    c = Client(token; prefix = PREFIX, presence=(game=(name="MeetBot", type=AT_GAME),))
+    c = Client(token; 
+        prefix = PREFIX, 
+        presence=(game=(name="MeetBot", type=AT_GAME),))
     open(c)
     @info "Try fetch(Discord.get_current_user_guilds(c)).val"
     return c
