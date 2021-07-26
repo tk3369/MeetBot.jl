@@ -48,7 +48,7 @@ function process_meet_requests(c::Client)
         register_request(request)
         if length(MEET_GROUP) == 3  # should be 4
             channel = create_voice_channel(c)
-            notify_meet_group(channel)
+            notify_meet_group(channel, c)
             empty_meet_group()
         end
     end
@@ -61,22 +61,35 @@ current_requests() = collect(values(MEET_GROUP))
 function create_voice_channel(c::Client)
     @info "Alright, let's create a new voice channel."
     lock(MEET_CHANNELS_LOCK) do 
-        # TODO create a channel and push! to MEET_CHANNELS
+        # find the guild from the guild array and setup room counter
         guild_arr = fetchval(get_current_user_guilds(c))
         guild = first(guild_arr)
         room_count = length(MEET_CHANNELS) + 1
         if room_count == 1
+            # creates a category if its the first voice channel being created
             global category_id = fetchval(create(c, DiscordChannel, guild; name="Meetup", type=CT_GUILD_CATEGORY)).id
         end
-
+        # get user ids from MEET_GROUP
         uids = keys(MEET_GROUP)
+        @info uids
         overwrite_arr = []
+        # Create an overwrite object for each user in the meet group
         for id in uids
             new_overwrite = Overwrite(id, OT_MEMBER, Int(PERM_VIEW_CHANNEL), 0)
-            append!(overwrite_arr, new_overwrite)
+            push!(overwrite_arr, new_overwrite)
         end
+
+        #Create overwrite object for everyone to prevent anyone else from seeing it
+        @info guild.id
+        everyone_id = find_id(c, guild.id, "@everyone")
+        @info everyone_id
+        everyone_overwrite = Overwrite(everyone_id, OT_ROLE, 0, Int(PERM_VIEW_CHANNEL))
+        push!(overwrite_arr, everyone_overwrite)
+
+        # Create the voice channel/push to MEET_CHANNELS
         vc = fetchval(create(c, DiscordChannel, guild; name="Meetup Room "*string(room_count), 
         type=CT_GUILD_VOICE, parent_id=category_id, permission_overwrites=overwrite_arr))
+        @info vc
         room_count+=1
         push!(MEET_CHANNELS, vc)
 
@@ -85,13 +98,29 @@ function create_voice_channel(c::Client)
     end
 end
 
+# helper function that finds the id of the given role
+function find_id(c::Client, guild_id, role)
+    role_lst = fetchval(get_guild_roles(c, guild_id))
+    @info role_lst
+    for r in role_lst
+        if r.name == role
+            return r.id
+        end
+    end
+    throw(MissingException("role not found"))
+end
+
 """
 Send DM to participants of the current meet group and ask them
 to join the voice channel.
 """
-function notify_meet_group(channel)
+function notify_meet_group(channel, c::Client)
     for request in current_requests()
-        @info "Hey $(request.user.username), please join $channel" #TODO
+        channel_id = channel.id
+        content = "Hey $(request.user.username), thanks for waiting! 
+        Please join <#" * string(channel_id) * ">"
+        dm = fetchval(create_dm(c; recipient_id = request.user.id))
+        create_message(c, dm.id; content=content)
     end
 end
 
