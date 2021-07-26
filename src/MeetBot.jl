@@ -39,7 +39,7 @@ end
 function get_config()
     if get(ENV, "MEETBOT_ENV", "DEV") == "DEV"
         return Config(
-            meet_channel_lifetime = Minute(10),
+            meet_channel_lifetime = Minute(2),
             time_to_notify1 = Second(5),
             time_to_notify2 = Second(15),
             time_to_delete_request = Minute(1),
@@ -80,7 +80,7 @@ function process_meet_requests(c::Client)
 
         @info "process_meet_requests: got request" request
         register_request(request)
-        if length(MEET_GROUP) == 2  # should be 4
+        if length(MEET_GROUP) == 1  # should be 4
             channel = create_voice_channel(c, request.guild_id)
             notify_meet_group(channel, c)
             empty_meet_group()
@@ -283,6 +283,7 @@ function gc_meet_channels(c::Client)
                 foreach(old_meet_channels) do mc
                     @info "Deleting channel" mc
                     delete_channel(c, mc.channel_id)
+                    delete!(MEET_CHANNELS, mc)
                 end
             end
             sleep(60)
