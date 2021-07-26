@@ -4,6 +4,7 @@ using Discord
 using Discord: Snowflake
 using Dates: now, DateTime, TimePeriod, Second, Minute, Hour
 using Base.Threads: SpinLock
+using UUIDs: uuid4
 
 const PREFIX = ","
 
@@ -79,8 +80,8 @@ function process_meet_requests(c::Client)
 
         @info "process_meet_requests: got request" request
         register_request(request)
-        if length(MEET_GROUP) == 3  # should be 4
-            channel = create_voice_channel(c)
+        if length(MEET_GROUP) == 2  # should be 4
+            channel = create_voice_channel(c, request.guild_id)
             notify_meet_group(channel, c)
             empty_meet_group()
         end
@@ -90,44 +91,68 @@ end
 "Return the current requests pending in the meet group."
 current_requests() = collect(values(MEET_GROUP))
 
+"""
+Find Meetup category.
+"""
+function find_meetup_category(c::Client,  guild_id::Snowflake)
+    channels = fetchval(Discord.get_guild_channels(c, guild_id))
+    idx = findfirst(x -> x.type == CT_GUILD_CATEGORY && x.name == "Meetup", channels)
+    return idx !== nothing ? channels[idx].id : nothing
+end
+
+"""
+Ensure that a Meetup category channel is created. 
+Return the category's channel id.
+"""
+function ensure_meetup_category(c::Client,  guild_id::Snowflake)
+    category_id = find_meetup_category(c, guild_id)
+    if category_id === nothing
+        guild = fetchval(get_guild(c, guild_id))
+        category_channel = fetchval(create(c, DiscordChannel, guild; 
+            name="Meetup", type=CT_GUILD_CATEGORY))
+        category_id = category_channel.id
+    end
+    return category_id
+end
+
 "Create a new voice channel"
-function create_voice_channel(c::Client)
+function create_voice_channel(c::Client, guild_id::Snowflake)
     @info "Alright, let's create a new voice channel."
     lock(MEET_CHANNELS_LOCK) do 
-        # find the guild from the guild array and setup room counter
-        guild_arr = fetchval(get_current_user_guilds(c))
-        guild = first(guild_arr)
-        room_count = length(MEET_CHANNELS) + 1
-        if room_count == 1
-            # creates a category if its the first voice channel being created
-            global category_id = fetchval(create(c, DiscordChannel, guild; name="Meetup", type=CT_GUILD_CATEGORY)).id
-        end
-        # get user ids from MEET_GROUP
+        category_id = ensure_meetup_category(c, guild_id)
+
+        # get user ids from MEET_`GROUP
         uids = keys(MEET_GROUP)
-        @info uids
-        overwrite_arr = []
+        @info "User id's in MEET_GROUP" uids
+
         # Create an overwrite object for each user in the meet group
+        overwrite_arr = []
         for id in uids
             new_overwrite = Overwrite(id, OT_MEMBER, Int(PERM_VIEW_CHANNEL), 0)
             push!(overwrite_arr, new_overwrite)
         end
 
         #Create overwrite object for everyone to prevent anyone else from seeing it
-        @info guild.id
-        everyone_id = find_id(c, guild.id, "@everyone")
-        @info everyone_id
+        everyone_id = find_id(c, guild_id, "@everyone")
+        @info "@everyone id" everyone_id
         everyone_overwrite = Overwrite(everyone_id, OT_ROLE, 0, Int(PERM_VIEW_CHANNEL))
         push!(overwrite_arr, everyone_overwrite)
 
         # Create the voice channel/push to MEET_CHANNELS
-        vc = fetchval(create(c, DiscordChannel, guild; name="Meetup Room "*string(room_count), 
-        type=CT_GUILD_VOICE, parent_id=category_id, permission_overwrites=overwrite_arr))
-        @info vc
-        room_count+=1
-        push!(MEET_CHANNELS, vc)
+        room_name = "Meetup Room " * string(uuid4())[1:6]
+        guild = fetchval(get_guild(c, guild_id))
+        
+        vc = fetchval(create(c, DiscordChannel, guild;
+            name = room_name, 
+            type = CT_GUILD_VOICE,
+            parent_id = category_id, 
+            permission_overwrites = overwrite_arr))
+        @info "Created voice channel" vc
 
-        # Return a channel object
-        return vc
+        mc = MeetChannel(vc.id, now(), room_name)
+        push!(MEET_CHANNELS, mc)
+
+        return mc
     end
 end
 
@@ -147,11 +172,10 @@ end
 Send DM to participants of the current meet group and ask them
 to join the voice channel.
 """
-function notify_meet_group(channel, c::Client)
+function notify_meet_group(mc::MeetChannel, c::Client)
     for request in current_requests()
-        channel_id = channel.id
         content = "Hey $(request.user.username), thanks for waiting! 
-        Please join <#" * string(channel_id) * ">"
+        Please join <#" * string(mc.channel_id) * ">"
         dm = fetchval(create_dm(c; recipient_id = request.user.id))
         create_message(c, dm.id; content=content)
     end
