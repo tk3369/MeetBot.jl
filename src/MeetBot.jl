@@ -6,7 +6,7 @@ using Dates: now, DateTime, TimePeriod, Second, Minute, Hour
 using Base.Threads: SpinLock
 using UUIDs: uuid4
 
-const PREFIX = ","
+const PREFIX = "!"
 
 const QUEUE = Channel(100)
 const MEET_GROUP = Dict()
@@ -39,7 +39,7 @@ end
 function get_config()
     if get(ENV, "MEETBOT_ENV", "DEV") == "DEV"
         return Config(
-            meet_channel_lifetime = Minute(2),
+            meet_channel_lifetime = Minute(10),
             time_to_notify1 = Second(5),
             time_to_notify2 = Second(15),
             time_to_delete_request = Minute(1),
@@ -64,13 +64,30 @@ function shutdown_command(c::Client, m::Message)
     end
 end
 
-"Create a new meet request."
-function meet_command(c::Client, m::Message)
-    @info "Meet command"
+"Create a new meet request after user confirms they want to meetup."
+function confirmation_command(c::Client, m::Message)
+    @info "Meetup confirmation command"
     request = MeetRequest(m.guild_id, m.author, now(), false, false)
     put!(QUEUE, request)
     username = m.author.username
     reply(c, m, "Hey, $(username), you have been added to the meetup queue. Stay tuned...")
+end
+
+"""
+Introductory command that shows the other commands
+"""
+function meet_command(c::Client, m::Message)
+    @info "Meetbot's introductory command"
+    uid = m.author.id
+    text = "<@$(uid)>, Thank you for using MeetBot! To begin meeting new people, type **!confirm** to be added to the meetup queue or if you want to leave the queue, type **!quit**."
+    reply(c, m, text)
+end
+
+function quit_command(c::Client, m::Message)
+    @info "Remove a person waiting in queue if they choose to leave"
+    text = "Sad to see you leave, but you have been removed from the queue."
+    cancel_request(MEET_GROUP[m.author.id])
+    reply(c, m, text)
 end
 
 function process_meet_requests(c::Client)
@@ -80,7 +97,7 @@ function process_meet_requests(c::Client)
 
         @info "process_meet_requests: got request" request
         register_request(request)
-        if length(MEET_GROUP) == 1  # should be 4
+        if length(MEET_GROUP) == 4  # should be 4
             channel = create_voice_channel(c, request.guild_id)
             notify_meet_group(channel, c)
             empty_meet_group()
@@ -309,7 +326,9 @@ function run()
     c = Client(token; prefix = PREFIX, presence=(game=(name="MeetBot", type=AT_GAME),))
 
     add_command!(c, :shutdown, shutdown_command; help="shutdown bot")
-    add_command!(c, :meet, meet_command; help="meet someone")
+    add_command!(c, :confirm, confirmation_command; help="enter person into meetup queue")
+    add_command!(c, :meet, meet_command; help="give information about how meetbot works")
+    add_command!(c, :quit, quit_command; help="removes a user from queue if they choose to leave")
 
     open(c)
     @info "Connected to client" c
