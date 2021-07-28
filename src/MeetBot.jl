@@ -69,8 +69,10 @@ function confirmation_command(c::Client, m::Message)
     @info "Meetup confirmation command"
     request = MeetRequest(m.guild_id, m.author, now(), false, false)
     put!(QUEUE, request)
-    username = m.author.username
-    reply(c, m, "Hey, $(username), you have been added to the meetup queue. Stay tuned...")
+    uid = m.author.id
+    reply(c, m, 
+        "Hey, <@$(uid)>, you have been added to the meetup queue. " *
+        "If you want to leave the queue, just type **!quit**.")
 end
 
 """
@@ -79,14 +81,24 @@ Introductory command that shows the other commands
 function meet_command(c::Client, m::Message)
     @info "Meetbot's introductory command"
     uid = m.author.id
-    text = "<@$(uid)>, Thank you for using MeetBot! To begin meeting new people, type **!confirm** to be added to the meetup queue or if you want to leave the queue, type **!quit**."
+    text = "Hey <@$(uid)>, thank you for using MeetBot! " *
+        "To begin meeting new people, type **!confirm** to join " *
+        "the meetup queue."
     reply(c, m, text)
 end
 
 function quit_command(c::Client, m::Message)
     @info "Remove a person waiting in queue if they choose to leave"
-    text = "Sad to see you leave, but you have been removed from the queue."
+    uid = m.author.id
+    text = "Hey <@$(uid)>, sad to see you leave, but you have been " *
+        "removed from the queue."
+    if haskey(MEET_GROUP, m.author.id)
     cancel_request(MEET_GROUP[m.author.id])
+    end
+    # We will just send a reply anyways even if the user
+    # was not in the queue previously. Not going to argue
+    # with the user about whether it was in the queue before
+    # or not :-)
     reply(c, m, text)
 end
 
@@ -234,8 +246,13 @@ end
 function notify_participant(c::Client, request, notify_count)
     if notify_count == 1
         message = "I know, you've been waiting for a while. Please be patient."
-    else
-        message = "Unfortunately, we are still waiting for someone to meet up. We will let you know once it's available."
+    elseif notify_count == 2
+        message = "Unfortunately, we are still waiting for someone to meet up. " *
+            "We will let you know once it's available."
+    else # final notification
+        message = "Sorry to keep you waiting, but there is not enough people to " *
+            "meet up at this time. You have been removed from the queue for now. " *
+            "Please try again later."
     end
     @info "Sending DM to $(request.user.username)" message now()
     dm = fetchval(create_dm(c; recipient_id = request.user.id))
@@ -260,6 +277,7 @@ function check_meet_group(c::Client)
                     elapsed = current_time - request.queue_time
                     if elapsed > cfg.time_to_delete_request
                         cancel_request(request)
+                        notify_participant(c, request, 3)
                     elseif elapsed > cfg.time_to_notify2
                         !request.notify2 && notify_participant(c, request, 2)
                         request.notify2 = true
